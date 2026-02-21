@@ -85,6 +85,12 @@ export async function deleteCredential(id: number): Promise<SuccessResponse> {
   return data
 }
 
+// 设为当前凭据
+export async function setCredentialCurrent(id: number): Promise<SuccessResponse> {
+  const { data } = await api.post<SuccessResponse>(`/credentials/${id}/current`)
+  return data
+}
+
 // 获取负载均衡模式
 export async function getLoadBalancingMode(): Promise<{ mode: 'priority' | 'balanced' }> {
   const { data } = await api.get<{ mode: 'priority' | 'balanced' }>('/config/load-balancing')

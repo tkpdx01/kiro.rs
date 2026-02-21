@@ -13,6 +13,7 @@ use tokio::sync::Mutex as TokioMutex;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration as StdDuration, Instant};
 
 use crate::http_client::{ProxyConfig, build_client};
@@ -494,6 +495,8 @@ pub struct MultiTokenManager {
     is_multiple_format: bool,
     /// 负载均衡模式（运行时可修改）
     load_balancing_mode: Mutex<String>,
+    /// 后台预刷新失败退避记录：credential id → 下次可重试时间
+    refresh_backoff: Mutex<HashMap<u64, Instant>>,
     /// 最近一次统计持久化时间（用于 debounce）
     last_stats_save_at: Mutex<Option<Instant>>,
     /// 统计数据是否有未落盘更新
@@ -608,6 +611,7 @@ impl MultiTokenManager {
             load_balancing_mode: Mutex::new(load_balancing_mode),
             last_stats_save_at: Mutex::new(None),
             stats_dirty: AtomicBool::new(false),
+            refresh_backoff: Mutex::new(HashMap::new()),
         };
 
         // 如果有新分配的 ID 或新生成的 machineId，立即持久化到配置文件
@@ -1203,6 +1207,24 @@ impl MultiTokenManager {
         result
     }
 
+    /// 设置指定凭据为当前活跃凭据（Admin API）
+    ///
+    /// 凭据必须存在且未被禁用
+    pub fn set_current(&self, id: u64) -> anyhow::Result<()> {
+        let entries = self.entries.lock();
+        let entry = entries
+            .iter()
+            .find(|e| e.id == id)
+            .ok_or_else(|| anyhow::anyhow!("凭据不存在: {}", id))?;
+        if entry.disabled {
+            anyhow::bail!("无法设为当前：凭据 #{} 已被禁用", id);
+        }
+        let mut current_id = self.current_id.lock();
+        *current_id = id;
+        tracing::info!("已手动设置当前凭据为 #{}", id);
+        Ok(())
+    }
+
     /// 切换到优先级最高的可用凭据
     ///
     /// 返回是否成功切换
@@ -1642,6 +1664,76 @@ impl MultiTokenManager {
 
         tracing::info!("负载均衡模式已设置为: {}", mode);
         Ok(())
+    }
+
+    /// 启动后台 Token 预刷新任务
+    ///
+    /// 每隔 interval 秒检查所有凭据，提前刷新即将过期的 Token，
+    /// 避免请求时同步刷新导致的延迟（~1-2s AWS OIDC 往返）。
+    pub fn start_background_refresh(
+        self: &Arc<Self>,
+        interval_secs: u64,
+        ahead_minutes: i64,
+    ) {
+        let manager = Arc::clone(self);
+        tokio::spawn(async move {
+            let mut interval =
+                tokio::time::interval(tokio::time::Duration::from_secs(interval_secs));
+            tracing::info!(
+                "后台预刷新已启动: 每 {}s 检查, 提前 {}min 刷新",
+                interval_secs,
+                ahead_minutes
+            );
+            loop {
+                interval.tick().await;
+                manager.refresh_expiring_tokens(ahead_minutes).await;
+            }
+        });
+    }
+
+    /// 刷新所有即将过期的 Token
+    async fn refresh_expiring_tokens(&self, ahead_minutes: i64) {
+        // 快照：获取需要刷新的凭据 ID 列表
+        let to_refresh: Vec<u64> = {
+            let entries = self.entries.lock();
+            entries
+                .iter()
+                .filter(|e| !e.disabled)
+                .filter(|e| {
+                    is_token_expiring_within(&e.credentials, ahead_minutes).unwrap_or(false)
+                })
+                .map(|e| e.id)
+                .collect()
+        };
+
+        if to_refresh.is_empty() {
+            return;
+        }
+
+        tracing::debug!("后台预刷新: {} 个凭据需要刷新", to_refresh.len());
+
+        for id in to_refresh {
+            // 每次刷新前重新读取最新凭据（可能已被请求路径刷新）
+            let creds = {
+                let entries = self.entries.lock();
+                entries
+                    .iter()
+                    .find(|e| e.id == id)
+                    .map(|e| e.credentials.clone())
+            };
+
+            let Some(creds) = creds else { continue };
+
+            // 再次检查是否仍需刷新（避免与请求路径竞争）
+            if !is_token_expiring_within(&creds, ahead_minutes).unwrap_or(false) {
+                continue;
+            }
+
+            match self.try_ensure_token(id, &creds).await {
+                Ok(_) => tracing::info!("后台预刷新成功: 凭据 #{}", id),
+                Err(e) => tracing::warn!("后台预刷新失败: 凭据 #{}: {}", id, e),
+            }
+        }
     }
 }
 

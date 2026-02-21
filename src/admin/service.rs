@@ -120,6 +120,13 @@ impl AdminService {
             .map_err(|e| self.classify_error(e, id))
     }
 
+    /// 设置指定凭据为当前活跃凭据
+    pub fn set_current(&self, id: u64) -> Result<(), AdminServiceError> {
+        self.token_manager
+            .set_current(id)
+            .map_err(|e| self.classify_error(e, id))
+    }
+
     /// 获取凭据余额（带缓存）
     pub async fn get_balance(&self, id: u64) -> Result<BalanceResponse, AdminServiceError> {
         // 先查缓存

@@ -7,6 +7,7 @@ import {
   getCredentialBalance,
   addCredential,
   deleteCredential,
+  setCredentialCurrent,
   getLoadBalancingMode,
   setLoadBalancingMode,
 } from '@/api/credentials'
@@ -82,6 +83,17 @@ export function useDeleteCredential() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: (id: number) => deleteCredential(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['credentials'] })
+    },
+  })
+}
+
+// 设为当前凭据
+export function useSetCurrent() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (id: number) => setCredentialCurrent(id),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['credentials'] })
     },
