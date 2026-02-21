@@ -13,7 +13,8 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import type { CredentialStatusItem, BalanceResponse } from '@/types/api'
+import type { CredentialStatusItem } from '@/types/api'
+import type { BalanceCacheEntry } from '@/components/dashboard'
 import {
   useSetDisabled,
   useSetPriority,
@@ -28,7 +29,7 @@ interface CredentialTableProps {
   onToggleSelect: (id: number) => void
   onSelectGroup: (ids: number[]) => void
   onDeselectGroup: (ids: number[]) => void
-  balanceMap: Map<number, BalanceResponse>
+  balanceMap: Map<number, BalanceCacheEntry>
   loadingBalanceIds: Set<number>
   onViewBalance: (id: number) => void
 }
@@ -48,22 +49,38 @@ function formatLastUsed(lastUsedAt: string | null): string {
   const days = Math.floor(hours / 24)
   return `${days}d`
 }
+
+function formatQueriedAt(ts: number | null): string {
+  if (!ts) return ''
+  const diff = Date.now() - ts
+  if (diff < 0) return '刚刚'
+  const seconds = Math.floor(diff / 1000)
+  if (seconds < 60) return `${seconds}s前`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m前`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h前`
+  const days = Math.floor(hours / 24)
+  return `${days}d前`
+}
 /* -- CredentialRow: desktop table row + mobile card -- */
 function CredentialRow({
   credential,
   selected,
   onToggleSelect,
-  balance,
+  cacheEntry,
   loadingBalance,
   onViewBalance,
 }: {
   credential: CredentialStatusItem
   selected: boolean
   onToggleSelect: () => void
-  balance: BalanceResponse | null
+  cacheEntry: BalanceCacheEntry | null
   loadingBalance: boolean
   onViewBalance: (id: number) => void
 }) {
+  const balance = cacheEntry?.balance ?? null
+  const queriedAt = cacheEntry?.queriedAt ?? null
   const [editingPriority, setEditingPriority] = useState(false)
   const [priorityValue, setPriorityValue] = useState(String(credential.priority))
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
@@ -154,6 +171,8 @@ function CredentialRow({
     </div>
   )
 
+  const queryTimeLabel = formatQueriedAt(queriedAt)
+
   const usageBar = loadingBalance ? (
     <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />
   ) : balance ? (
@@ -224,7 +243,10 @@ function CredentialRow({
           {loadingBalance ? (
             <Loader2 className="w-3 h-3 animate-spin text-muted-foreground" />
           ) : (
-            <span className="text-xs">{balance?.subscriptionTitle || '-'}</span>
+            <div className="flex items-center gap-1">
+              <span className="text-xs">{balance?.subscriptionTitle || '-'}</span>
+              {queryTimeLabel && <span className="text-[10px] text-muted-foreground/60">{queryTimeLabel}</span>}
+            </div>
           )}
         </td>
         <td className="px-2 py-1.5 w-[150px]">
@@ -254,7 +276,7 @@ function CredentialRow({
         <div className="flex flex-wrap gap-x-3 gap-y-1 text-xs text-muted-foreground ml-6 mb-1.5">
           <span>{credential.authMethod || '-'}</span>
           <span>P:{credential.priority}</span>
-          <span>{balance?.subscriptionTitle || '-'}</span>
+          <span>{balance?.subscriptionTitle || '-'}{queryTimeLabel && <span className="text-muted-foreground/60"> {queryTimeLabel}</span>}</span>
           <span>{credential.successCount}/{credential.failureCount > 0 ? <span className="text-red-500">{credential.failureCount}</span> : credential.failureCount}</span>
           <span>{formatLastUsed(credential.lastUsedAt)}</span>
         </div>
@@ -345,7 +367,7 @@ export function CredentialTable({
                     credential={cred}
                     selected={selectedIds.has(cred.id)}
                     onToggleSelect={() => onToggleSelect(cred.id)}
-                    balance={balanceMap.get(cred.id) || null}
+                    cacheEntry={balanceMap.get(cred.id) || null}
                     loadingBalance={loadingBalanceIds.has(cred.id)}
                     onViewBalance={onViewBalance}
                   />
@@ -361,7 +383,7 @@ export function CredentialTable({
                 credential={cred}
                 selected={selectedIds.has(cred.id)}
                 onToggleSelect={() => onToggleSelect(cred.id)}
-                balance={balanceMap.get(cred.id) || null}
+                cacheEntry={balanceMap.get(cred.id) || null}
                 loadingBalance={loadingBalanceIds.has(cred.id)}
                 onViewBalance={onViewBalance}
               />

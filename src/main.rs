@@ -90,6 +90,10 @@ async fn main() {
         std::process::exit(1);
     });
     let token_manager = Arc::new(token_manager);
+
+    // 启动后台 Token 预刷新（每 5 秒检查，提前 15 分钟刷新）
+    token_manager.start_background_refresh(5, 15);
+
     let kiro_provider = KiroProvider::with_proxy(token_manager.clone(), proxy_config.clone());
 
     // 初始化 count_tokens 配置

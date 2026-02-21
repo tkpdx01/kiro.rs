@@ -16,6 +16,11 @@ import { getCredentialBalance, setCredentialDisabled } from '@/api/credentials'
 import { extractErrorMessage } from '@/lib/utils'
 import type { BalanceResponse } from '@/types/api'
 
+export interface BalanceCacheEntry {
+  balance: BalanceResponse
+  queriedAt: number
+}
+
 interface DashboardProps {
   onLogout: () => void
 }
@@ -30,7 +35,17 @@ export function Dashboard({ onLogout }: DashboardProps) {
   const [verifying, setVerifying] = useState(false)
   const [verifyProgress, setVerifyProgress] = useState({ current: 0, total: 0 })
   const [verifyResults, setVerifyResults] = useState<Map<number, VerifyResult>>(new Map())
-  const [balanceMap, setBalanceMap] = useState<Map<number, BalanceResponse>>(new Map())
+  const [balanceMap, setBalanceMap] = useState<Map<number, BalanceCacheEntry>>(() => {
+    const cached = storage.getBalanceCache()
+    const map = new Map<number, BalanceCacheEntry>()
+    for (const [key, entry] of Object.entries(cached)) {
+      const id = Number(key)
+      if (!isNaN(id) && entry.balance && entry.queriedAt) {
+        map.set(id, entry as BalanceCacheEntry)
+      }
+    }
+    return map
+  })
   const [loadingBalanceIds, setLoadingBalanceIds] = useState<Set<number>>(new Set())
   const [queryingInfo, setQueryingInfo] = useState(false)
   const [queryInfoProgress, setQueryInfoProgress] = useState({ current: 0, total: 0 })
@@ -67,7 +82,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
     const validIds = new Set(data.credentials.map(credential => credential.id))
 
     setBalanceMap(prev => {
-      const next = new Map<number, BalanceResponse>()
+      const next = new Map<number, BalanceCacheEntry>()
       prev.forEach((value, id) => {
         if (validIds.has(id)) {
           next.set(id, value)
@@ -89,6 +104,15 @@ export function Dashboard({ onLogout }: DashboardProps) {
       return next.size === prev.size ? prev : next
     })
   }, [data?.credentials])
+
+  // 持久化余额缓存到 localStorage
+  useEffect(() => {
+    const obj: Record<string, { balance: unknown; queriedAt: number }> = {}
+    balanceMap.forEach((entry, id) => {
+      obj[String(id)] = { balance: entry.balance, queriedAt: entry.queriedAt }
+    })
+    storage.setBalanceCache(obj)
+  }, [balanceMap])
 
   const toggleDarkMode = () => {
     setDarkMode(!darkMode)
@@ -343,7 +367,7 @@ export function Dashboard({ onLogout }: DashboardProps) {
 
         setBalanceMap(prev => {
           const next = new Map(prev)
-          next.set(id, balance)
+          next.set(id, { balance, queriedAt: Date.now() })
           return next
         })
       } catch (error) {
